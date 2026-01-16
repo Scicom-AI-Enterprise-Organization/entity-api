@@ -581,10 +581,10 @@ async def health():
     return {'status': 'healthy', 'model_loaded': model is not None}
 
 
-@app.post('/predict')
-async def predict(form: EntityRequest, request: Request):
+@app.post('/batch/predict')
+async def batch_predict_entities(form: EntityRequest, request: Request):
     """
-    Process entity extraction for multiple texts.
+    Process entity extraction for multiple texts (batch).
     
     Returns same format as /ner endpoint for each text:
     - text, masked_text, name, address, ic, phone, email
@@ -706,11 +706,11 @@ async def predict(form: EntityRequest, request: Request):
     return {
         'id': request_id,
         'results': results,
-    }
+        }
 
 
-@app.post('/ner')
-async def ner(request: Request):
+@app.post('/predict')
+async def predict_single(request: Request):
     """
     Named Entity Recognition endpoint with token merging and regex support.
     
@@ -718,7 +718,7 @@ async def ner(request: Request):
     Outputs masked_text with entity placeholders.
     
     Example:
-        POST /ner
+        POST /predict
         {"text": "nama saya husein nombor saya 0162587806"}
         
         Response:
@@ -817,11 +817,11 @@ async def ner(request: Request):
                         'text': entity_text,
                     })
                 # Start new entity
-                current_entity = {
+            current_entity = {
                     'type': entity_type,
                     'words': [word],
                     'indices': [i],
-                }
+            }
         else:
             # Not an entity - save any current entity
             if current_entity:

@@ -38,7 +38,7 @@ RUN pip3 install --no-cache-dir \
 COPY flash_infer_encoder_non_causal/ ./flash_infer_encoder_non_causal/
 
 # Expose port
-EXPOSE 7100
+EXPOSE 8000
 
 # Default command
-CMD ["python3", "-m", "flash_infer_encoder_non_causal.main", "--host", "0.0.0.0", "--port", "7100"]
+CMD ["python3", "-m", "flash_infer_encoder_non_causal.main", "--host", "0.0.0.0", "--port", "8000"]

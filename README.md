@@ -5,7 +5,7 @@ Continuous batching API for encoder models (Token Classification / NER) using Fl
 ## Overview
 
 - Custom Attention Interface using FlashInfer BatchPrefillWithRaggedKVCacheWrapper
-- Dynamic batching using varlen ragged tensor style - NO PADDING!
+- Dynamic batching using varlen ragged tensor style
 - Encoder model doesn't need KV Cache, so straight forward to implement
 - Non-causal (bidirectional) attention support
 
@@ -23,10 +23,10 @@ uv pip install -r requirements.txt
 
 ## How to Run Locally
 
-### Run Scicom-intl/multilingual-dynamic-entity-decoder
+### Run scicom-intl/multilingual-dynamic-entity-decoder
 
 ```bash
-CUDA_VISIBLE_DEVICES=2 python3 -m flash_infer_encoder_non_causal.main --host 0.0.0.0 --port 7100
+CUDA_VISIBLE_DEVICES=2 python3 -m flash_infer_encoder_non_causal.main --host 0.0.0.0 --port 8000
 ```
 
 ### Supported Parameters
@@ -46,7 +46,7 @@ Configuration parser
 options:
   -h, --help            show this help message and exit
   --host HOST           host name to host the app (default: 0.0.0.0)
-  --port PORT           port to host the app (default: 7100)
+  --port PORT           port to host the app (default: 8000)
   --model MODEL         Model type (default: Scicom-intl/multilingual-dynamic-entity-decoder)
   --loglevel LOGLEVEL   Logging level (default: INFO)
   --max_batch_size MAX_BATCH_SIZE
@@ -63,93 +63,38 @@ options:
 
 ### Supported Model
 
-- [Scicom-intl/multilingual-dynamic-entity-decoder](https://huggingface.co/Scicom-intl/multilingual-dynamic-entity-decoder)
+- [scicom-intl/multilingual-dynamic-entity-decoder](https://huggingface.co/Scicom-intl/multilingual-dynamic-entity-decoder)
 
 ## Simple API Example
 
-### NER Endpoint
-
-The `/ner` endpoint extracts named entities and returns a masked text with entity placeholders.
-
-**Supported Entity Types:**
-- `name` - Person names (from model)
-- `address` - Locations/addresses (from model)
-- `ic` - Malaysian IC numbers (regex: `XXXXXX-XX-XXXX` or `XXXXXXXXXXXX`)
-- `phone` - Phone numbers (regex)
-- `email` - Email addresses (regex)
+### Single Prediction
 
 ```bash
-curl -X POST http://localhost:7100/ner \
+curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
-  -d '{"text": "saya dari Kuala Lumpur"}'
+  -d '{"text": "nama saya Ahmad dari Kuala Lumpur, IC 900101-01-0101, hubungi 0123456789 atau email ahmad@test.com"}'
 ```
 
 Output:
 
 ```json
 {
-  "text": "saya dari Kuala Lumpur",
-  "masked_text": "saya dari <address>",
-  "name": [],
+  "text": "nama saya Ahmad dari Kuala Lumpur, IC 900101-01-0101, hubungi 0123456789 atau email ahmad@test.com",
+  "masked_text": "nama <name> dari <address> IC <ic> hubungi <phone> atau email <email>",
+  "name": ["saya Ahmad"],
   "address": ["Kuala Lumpur"],
-  "ic": [],
-  "phone": [],
-  "email": []
-}
-```
-
-**Example with multiple entity types:**
-
-```bash
-curl -X POST http://localhost:7100/ner \
-  -H "Content-Type: application/json" \
-  -d '{"text": "hubungi Ahmad di 0123456789 atau email test@gmail.com"}'
-```
-
-Output:
-
-```json
-{
-  "text": "hubungi Ahmad di 0123456789 atau email test@gmail.com",
-  "masked_text": "hubungi <name> di <phone> atau email <email>",
-  "name": ["Ahmad"],
-  "address": [],
-  "ic": [],
+  "ic": ["900101-01-0101"],
   "phone": ["0123456789"],
-  "email": ["test@gmail.com"]
-}
-```
-
-**Example with IC:**
-
-```bash
-curl -X POST http://localhost:7100/ner \
-  -H "Content-Type: application/json" \
-  -d '{"text": "IC saya 900101-14-5678"}'
-```
-
-Output:
-
-```json
-{
-  "text": "IC saya 900101-14-5678",
-  "masked_text": "IC <name> <ic>",
-  "name": [],
-  "address": [],
-  "ic": ["900101-14-5678"],
-  "phone": [],
-  "email": []
+  "email": ["ahmad@gmail.com"]
 }
 ```
 
 ### Batch Prediction
 
-The `/predict` endpoint processes multiple texts and returns the same format as `/ner` for each text.
-
 ```bash
-curl -X POST http://localhost:7100/predict \
+curl -X POST http://localhost:8000/batch/predict \
   -H "Content-Type: application/json" \
-  -d '{"texts": ["saya dari Kuala Lumpur", "hubungi Ahmad di 0123456789"]}'
+  -d '{"texts": ["nama Ali dari Johor Bahru, hubungi 0162587806", "IC saya 900101-14-5678, email ali@test.com"]}'
 ```
 
 Output:
@@ -159,23 +104,50 @@ Output:
   "id": "1706c984-c035-4a5f-8c61-f7b95c93c5ac",
   "results": [
     {
-      "text": "saya dari Kuala Lumpur",
-      "masked_text": "saya dari <address>",
-      "name": [],
-      "address": ["Kuala Lumpur"],
-      "ic": [],
-      "phone": [],
-      "email": []
-    },
-    {
-      "text": "hubungi Ahmad di 0123456789",
-      "masked_text": "hubungi <name> di <phone>",
-      "name": ["Ahmad"],
-      "address": [],
+      "text": "nama Ali dari Johor Bahru, hubungi 0123456789",
+      "masked_text": "nama <name> dari <address> hubungi <phone>",
+      "name": ["Ali"],
+      "address": ["Johor Bahru"],
       "ic": [],
       "phone": ["0123456789"],
       "email": []
+    },
+    {
+      "text": "IC saya 900101-01-0101, email xxx@gmail.com",
+      "masked_text": "IC <name> <ic> email <email>",
+      "name": [],
+      "address": [],
+      "ic": ["900101-01-0101"],
+      "phone": [],
+      "email": ["xxx@gmail.com"]
     }
   ]
 }
 ```
+
+## Unit Tests
+
+```bash
+python3 -m unittest test.test_varlen_batching
+python3 -m unittest test.test_bpe_merging
+python3 -m unittest test.test_regex_entities
+python3 -m unittest test.test_attention
+```
+
+**Test Coverage:**
+- `test_varlen_batching` - Variable length sequence packing and FlashInfer ragged prefill
+- `test_bpe_merging` - BPE token merging for GPT-style and SentencePiece tokens
+- `test_regex_entities` - IC, phone, and email extraction via regex patterns
+- `test_attention` - Non-causal attention correctness comparing FlashInfer with SDPA
+
+## Stress Test
+
+```bash
+locust -f stress_test.py -H http://localhost:8000 --web-port 7001
+```
+
+### Results
+
+RPS remains stable at ~560 req/s regardless of user count (from 200 to 900 users)
+
+![Locust Stress Test](images/locust-stress-test.png)
