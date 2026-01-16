@@ -30,6 +30,102 @@ import asyncio
 import uvicorn
 import time
 import uuid
+import re
+
+# Regex patterns for IC, phone, email
+REGEX_PATTERNS = {
+    'IC': re.compile(r'\b\d{6}-\d{2}-\d{4}\b|\b\d{12}\b'),
+    'PHONE': re.compile(r'\b(?:\+?6?0)?1[0-9]-?\d{3,4}-?\d{4}\b|\b0[3-9]-?\d{7,8}\b'),
+    'EMAIL': re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
+}
+
+
+def merge_bpe_tokens_tagging(tokens, labels, rejected=None, prefix_char='Ġ'):
+    """
+    Merge BPE subword tokens back to words with their labels.
+    Based on Malaya's merge_sentencepiece_tokens_tagging.
+    
+    Reference: https://github.com/malaysia-ai/malaya/blob/master/malaya/text/bpe.py#L1047
+    
+    Args:
+        tokens: List of BPE tokens
+        labels: List of labels for each token
+        rejected: List of special tokens to skip
+        prefix_char: Character that indicates start of new word ('Ġ' for GPT, '▁' for SentencePiece)
+    
+    Returns:
+        words: List of merged words
+        word_labels: List of labels for each word (takes first subword's label)
+    """
+    if rejected is None:
+        rejected = ['<s>', '</s>', '<pad>', '[CLS]', '[SEP]', '[PAD]', '<unk>']
+    
+    new_paired_tokens = []
+    n_tokens = len(tokens)
+    i = 0
+    
+    while i < n_tokens:
+        current_token, current_label = tokens[i], labels[i]
+        
+        # Skip rejected tokens
+        if current_token in rejected:
+            i += 1
+            continue
+        
+        # Check if this is continuation of previous word (no prefix and not first token)
+        if i > 0 and not current_token.startswith(prefix_char) and not current_token.startswith('▁'):
+            if new_paired_tokens:
+                previous_token, previous_label = new_paired_tokens.pop()
+                merged_token = previous_token
+                merged_label = previous_label  # Take first subword's label
+                
+                # Keep merging while tokens don't start with prefix
+                while (not current_token.startswith(prefix_char) and 
+                       not current_token.startswith('▁') and 
+                       current_token not in rejected):
+                    merged_token = merged_token + current_token
+                    i += 1
+                    if i < n_tokens:
+                        current_token, current_label = tokens[i], labels[i]
+                    else:
+                        break
+                
+                new_paired_tokens.append((merged_token, merged_label))
+            else:
+                new_paired_tokens.append((current_token, current_label))
+                i += 1
+        else:
+            # New word - remove prefix character
+            clean_token = current_token
+            if clean_token.startswith(prefix_char):
+                clean_token = clean_token[1:]
+            elif clean_token.startswith('▁'):
+                clean_token = clean_token[1:]
+            
+            new_paired_tokens.append((clean_token, current_label))
+            i += 1
+    
+    # Extract words and labels
+    words = [t[0] for t in new_paired_tokens if t[0] not in rejected and t[0]]
+    word_labels = [t[1] for t in new_paired_tokens if t[0] not in rejected and t[0]]
+    
+    return words, word_labels
+
+
+def extract_regex_entities(text):
+    """Extract entities using regex patterns (IC, phone, email)."""
+    entities = []
+    for entity_type, pattern in REGEX_PATTERNS.items():
+        for match in pattern.finditer(text):
+            entities.append({
+                'text': match.group(),
+                'label': entity_type,
+                'start': match.start(),
+                'end': match.end(),
+                'source': 'regex'
+            })
+    return entities
+
 
 # FlashInfer ragged batch prefill wrapper (global, reused across requests)
 prefill_wrapper = None
@@ -488,15 +584,27 @@ async def health():
 @app.post('/predict')
 async def predict(form: EntityRequest, request: Request):
     """
-    Process entity extraction/token classification request.
+    Process entity extraction for multiple texts.
     
-    Uses dynamic batching with Flash Attention for efficient inference.
-    Supports both regular text and word-split input for NER.
+    Returns same format as /ner endpoint for each text:
+    - text, masked_text, name, address, ic, phone, email
     """
     request_id = request.state.request_id
     
     results = []
     for text in form.texts:
+        # Extract regex entities (IC, phone, email)
+        regex_entities = {
+            'ic': [],
+            'phone': [],
+            'email': [],
+        }
+        
+        for entity_type, pattern in REGEX_PATTERNS.items():
+            for match in pattern.finditer(text):
+                regex_entities[entity_type.lower()].append(match.group())
+        
+        # Get model predictions
         future = asyncio.Future()
         await inference_queue.put({
             'inputs': text,
@@ -506,36 +614,122 @@ async def predict(form: EntityRequest, request: Request):
         })
         
         result = await future
-        results.append(result)
-    
-    return EntityResponse(
-        id=request_id,
-        results=results,
-        usage={
-            'num_texts': len(form.texts),
-            'total_tokens': sum(r['seq_length'] for r in results),
+        
+        # Merge BPE tokens with labels
+        merged_words, merged_labels = merge_bpe_tokens_tagging(
+            result['tokens'], 
+            result['labels']
+        )
+        
+        # Initialize entity lists
+        model_entities = {
+            'name': [],
+            'address': [],
         }
-    )
+        
+        # Label mapping
+        label_to_type = {
+            'LABEL_1': 'name',
+            'LABEL_2': 'address',
+        }
+        
+        # Extract entities by grouping consecutive same labels
+        current_entity = None
+        masked_words = merged_words.copy()
+        entity_word_indices = []
+        
+        for i, (word, label) in enumerate(zip(merged_words, merged_labels)):
+            if label in label_to_type:
+                entity_type = label_to_type[label]
+                if current_entity and current_entity['type'] == entity_type:
+                    current_entity['words'].append(word)
+                    current_entity['indices'].append(i)
+                else:
+                    if current_entity:
+                        entity_text = ' '.join(current_entity['words'])
+                        model_entities[current_entity['type']].append(entity_text)
+                        entity_word_indices.append({
+                            'indices': current_entity['indices'],
+                            'type': current_entity['type'],
+                        })
+                    current_entity = {
+                        'type': entity_type,
+                        'words': [word],
+                        'indices': [i],
+                    }
+            else:
+                if current_entity:
+                    entity_text = ' '.join(current_entity['words'])
+                    model_entities[current_entity['type']].append(entity_text)
+                    entity_word_indices.append({
+                        'indices': current_entity['indices'],
+                        'type': current_entity['type'],
+                    })
+                    current_entity = None
+        
+        if current_entity:
+            entity_text = ' '.join(current_entity['words'])
+            model_entities[current_entity['type']].append(entity_text)
+            entity_word_indices.append({
+                'indices': current_entity['indices'],
+                'type': current_entity['type'],
+            })
+        
+        # Create masked text
+        for entity_info in entity_word_indices:
+            indices = entity_info['indices']
+            entity_type = entity_info['type']
+            for idx in indices:
+                if idx == indices[0]:
+                    masked_words[idx] = f"<{entity_type}>"
+                else:
+                    masked_words[idx] = None
+        
+        final_masked_words = [w for w in masked_words if w is not None]
+        masked_text = ' '.join(final_masked_words)
+        
+        # Apply regex masking
+        for entity_type, entities in regex_entities.items():
+            for entity_text in entities:
+                masked_text = masked_text.replace(entity_text, f"<{entity_type}>")
+        
+        results.append({
+            'text': text,
+            'masked_text': masked_text,
+            'name': model_entities['name'],
+            'address': model_entities['address'],
+            'ic': regex_entities['ic'],
+            'phone': regex_entities['phone'],
+            'email': regex_entities['email'],
+        })
+    
+    return {
+        'id': request_id,
+        'results': results,
+    }
 
 
 @app.post('/ner')
 async def ner(request: Request):
     """
-    Named Entity Recognition endpoint.
+    Named Entity Recognition endpoint with token merging and regex support.
     
-    Accepts text and returns extracted entities with their labels.
-    Uses is_split_into_words=True for word-level NER.
+    Uses merge_bpe_tokens_tagging (like Malaya) to merge subword tokens.
+    Outputs masked_text with entity placeholders.
     
     Example:
         POST /ner
-        {"text": "Hi, my name is Alex and I'm from Perlis"}
+        {"text": "nama saya husein nombor saya 0162587806"}
         
         Response:
         {
-            "entities": [
-                {"word": "Alex", "label": "PER", "start": 4, "end": 5},
-                {"word": "Perlis", "label": "LOC", "start": 9, "end": 10}
-            ]
+            "text": "nama saya husein nombor saya 0162587806",
+            "masked_text": "nama saya <name> nombor saya <phone>",
+            "name": ["husein"],
+            "address": [],
+            "ic": [],
+            "phone": ["0162587806"],
+            "email": []
         }
     """
     body = await request.json()
@@ -544,74 +738,142 @@ async def ner(request: Request):
     if not text:
         raise HTTPException(status_code=400, detail="Text is required")
     
+    # First, extract regex entities (IC, phone, email) from original text
+    regex_entities = {
+        'ic': [],
+        'phone': [],
+        'email': [],
+    }
+    regex_spans = []  # Track spans for masking
+    
+    for entity_type, pattern in REGEX_PATTERNS.items():
+        for match in pattern.finditer(text):
+            regex_entities[entity_type.lower()].append(match.group())
+            regex_spans.append({
+                'start': match.start(),
+                'end': match.end(),
+                'text': match.group(),
+                'type': entity_type.lower(),
+            })
+    
+    # Sort spans by start position (descending) for replacement
+    regex_spans.sort(key=lambda x: x['start'], reverse=True)
+    
+    # Create masked text for regex entities
+    masked_text = text
+    for span in regex_spans:
+        placeholder = f"<{span['type']}>"
+        masked_text = masked_text[:span['start']] + placeholder + masked_text[span['end']:]
+    
+    # Now process with model for name/address entities
     future = asyncio.Future()
     await inference_queue.put({
         'inputs': text,
         'text_raw': text,
         'future': future,
         'request_id': request.state.request_id,
-        'is_split_into_words': True,
+        'is_split_into_words': False,  # Use regular tokenization, then merge
     })
     
     result = await future
     
-    # Extract entities from predictions
-    entities = []
-    current_entity = None
-    words = text.split()  # Original words for reference
-    word_ids = result.get('word_ids', [])
+    # Merge BPE tokens with labels (like Malaya's merge_sentencepiece_tokens_tagging)
+    merged_words, merged_labels = merge_bpe_tokens_tagging(
+        result['tokens'], 
+        result['labels']
+    )
     
-    for i, (label, token) in enumerate(zip(result['labels'], result['tokens'])):
-        # Skip special tokens
-        if token in ['[CLS]', '[SEP]', '[PAD]', '<s>', '</s>', '<pad>']:
-            continue
-        
-        # Get word index if available
-        word_idx = word_ids[i] if word_ids and i < len(word_ids) else None
-        
-        if label.startswith('B-'):
-            # Start of new entity
-            if current_entity:
-                entities.append(current_entity)
-            entity_type = label[2:]
-            current_entity = {
-                'label': entity_type,
-                'tokens': [token],
-                'start_idx': i,
-                'word_idx': word_idx,
-            }
-        elif label.startswith('I-') and current_entity:
-            # Continuation of entity
-            current_entity['tokens'].append(token)
+    # Initialize entity lists
+    model_entities = {
+        'name': [],      # LABEL_1 - person/name
+        'address': [],   # LABEL_2 - location/address
+    }
+    
+    # Label mapping
+    label_to_type = {
+        'LABEL_1': 'name',
+        'LABEL_2': 'address',
+    }
+    
+    # Extract entities by grouping consecutive same labels
+    current_entity = None
+    entity_word_indices = []  # Track which words are entities for masking
+    
+    for i, (word, label) in enumerate(zip(merged_words, merged_labels)):
+        if label in label_to_type:
+            entity_type = label_to_type[label]
+            if current_entity and current_entity['type'] == entity_type:
+                # Continue entity
+                current_entity['words'].append(word)
+                current_entity['indices'].append(i)
+            else:
+                # Save previous entity
+                if current_entity:
+                    entity_text = ' '.join(current_entity['words'])
+                    model_entities[current_entity['type']].append(entity_text)
+                    entity_word_indices.append({
+                        'indices': current_entity['indices'],
+                        'type': current_entity['type'],
+                        'text': entity_text,
+                    })
+                # Start new entity
+                current_entity = {
+                    'type': entity_type,
+                    'words': [word],
+                    'indices': [i],
+                }
         else:
-            # O label or mismatch
+            # Not an entity - save any current entity
             if current_entity:
-                entities.append(current_entity)
+                entity_text = ' '.join(current_entity['words'])
+                model_entities[current_entity['type']].append(entity_text)
+                entity_word_indices.append({
+                    'indices': current_entity['indices'],
+                    'type': current_entity['type'],
+                    'text': entity_text,
+                })
                 current_entity = None
     
+    # Don't forget last entity
     if current_entity:
-        entities.append(current_entity)
-    
-    # Format entities
-    formatted_entities = []
-    for ent in entities:
-        word_idx = ent.get('word_idx')
-        # Get original word if word_idx is available
-        original_word = words[word_idx] if word_idx is not None and word_idx < len(words) else None
-        formatted_entities.append({
-            'text': tokenizer.convert_tokens_to_string(ent['tokens']).strip(),
-            'label': ent['label'],
-            'start_token': ent['start_idx'],
-            'word_idx': word_idx,
-            'original_word': original_word,
+        entity_text = ' '.join(current_entity['words'])
+        model_entities[current_entity['type']].append(entity_text)
+        entity_word_indices.append({
+            'indices': current_entity['indices'],
+            'type': current_entity['type'],
+            'text': entity_text,
         })
     
+    # Create masked text for model entities
+    # Replace entity words in merged_words with placeholders
+    masked_words = merged_words.copy()
+    for entity_info in entity_word_indices:
+        indices = entity_info['indices']
+        entity_type = entity_info['type']
+        # Replace first word with placeholder, remove rest
+        for idx in indices:
+            if idx == indices[0]:
+                masked_words[idx] = f"<{entity_type}>"
+            else:
+                masked_words[idx] = None  # Mark for removal
+    
+    # Build final masked text from merged words
+    final_masked_words = [w for w in masked_words if w is not None]
+    model_masked_text = ' '.join(final_masked_words)
+    
+    # Apply regex masking to the model-masked text
+    for entity_type, entities in regex_entities.items():
+        for entity_text in entities:
+            model_masked_text = model_masked_text.replace(entity_text, f"<{entity_type}>")
+    
     return {
-        'id': request.state.request_id,
         'text': text,
-        'entities': formatted_entities,
-        'raw_labels': result['labels'],
-        'tokens': result['tokens'],
+        'masked_text': model_masked_text,
+        'name': model_entities['name'],
+        'address': model_entities['address'],
+        'ic': regex_entities['ic'],
+        'phone': regex_entities['phone'],
+        'email': regex_entities['email'],
     }
 
 

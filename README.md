@@ -69,61 +69,113 @@ options:
 
 ### NER Endpoint
 
+The `/ner` endpoint extracts named entities and returns a masked text with entity placeholders.
+
+**Supported Entity Types:**
+- `name` - Person names (from model)
+- `address` - Locations/addresses (from model)
+- `ic` - Malaysian IC numbers (regex: `XXXXXX-XX-XXXX` or `XXXXXXXXXXXX`)
+- `phone` - Phone numbers (regex)
+- `email` - Email addresses (regex)
+
 ```bash
 curl -X POST http://localhost:7100/ner \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hi my name is Alex from Perlis"}'
+  -d '{"text": "saya dari Kuala Lumpur"}'
 ```
 
 Output:
 
 ```json
 {
-  "id": "a3d02af9-f4fb-4015-b19b-9a65435ca9d6",
-  "text": "Hi my name is Alex from Perlis",
-  "entities": [],
-  "raw_labels": ["LABEL_0", "LABEL_1", "LABEL_1", "LABEL_1", "LABEL_1", "LABEL_0", "LABEL_2", "LABEL_2"],
-  "tokens": ["Hi", "my", "name", "is", "Alex", "from", "Per", "lis"]
+  "text": "saya dari Kuala Lumpur",
+  "masked_text": "saya dari <address>",
+  "name": [],
+  "address": ["Kuala Lumpur"],
+  "ic": [],
+  "phone": [],
+  "email": []
 }
 ```
 
-Labels:
-- `LABEL_0`: Non-entity (O)
-- `LABEL_1`: Name entity
-- `LABEL_2`: Address entity
+**Example with multiple entity types:**
+
+```bash
+curl -X POST http://localhost:7100/ner \
+  -H "Content-Type: application/json" \
+  -d '{"text": "hubungi Ahmad di 0123456789 atau email test@gmail.com"}'
+```
+
+Output:
+
+```json
+{
+  "text": "hubungi Ahmad di 0123456789 atau email test@gmail.com",
+  "masked_text": "hubungi <name> di <phone> atau email <email>",
+  "name": ["Ahmad"],
+  "address": [],
+  "ic": [],
+  "phone": ["0123456789"],
+  "email": ["test@gmail.com"]
+}
+```
+
+**Example with IC:**
+
+```bash
+curl -X POST http://localhost:7100/ner \
+  -H "Content-Type: application/json" \
+  -d '{"text": "IC saya 900101-14-5678"}'
+```
+
+Output:
+
+```json
+{
+  "text": "IC saya 900101-14-5678",
+  "masked_text": "IC <name> <ic>",
+  "name": [],
+  "address": [],
+  "ic": ["900101-14-5678"],
+  "phone": [],
+  "email": []
+}
+```
 
 ### Batch Prediction
+
+The `/predict` endpoint processes multiple texts and returns the same format as `/ner` for each text.
 
 ```bash
 curl -X POST http://localhost:7100/predict \
   -H "Content-Type: application/json" \
-  -d '{"texts": ["Hello world", "My name is John from KL"]}'
+  -d '{"texts": ["saya dari Kuala Lumpur", "hubungi Ahmad di 0123456789"]}'
 ```
 
 Output:
 
 ```json
 {
-  "id": "request-id",
+  "id": "1706c984-c035-4a5f-8c61-f7b95c93c5ac",
   "results": [
     {
-      "predictions": [0, 0],
-      "labels": ["LABEL_0", "LABEL_0"],
-      "tokens": ["Hello", "world"],
-      "seq_length": 2,
-      "varlen_batch": true
+      "text": "saya dari Kuala Lumpur",
+      "masked_text": "saya dari <address>",
+      "name": [],
+      "address": ["Kuala Lumpur"],
+      "ic": [],
+      "phone": [],
+      "email": []
     },
     {
-      "predictions": [1, 1, 1, 1, 0, 2],
-      "labels": ["LABEL_1", "LABEL_1", "LABEL_1", "LABEL_1", "LABEL_0", "LABEL_2"],
-      "tokens": ["My", "name", "is", "John", "from", "KL"],
-      "seq_length": 6,
-      "varlen_batch": true
+      "text": "hubungi Ahmad di 0123456789",
+      "masked_text": "hubungi <name> di <phone>",
+      "name": ["Ahmad"],
+      "address": [],
+      "ic": [],
+      "phone": ["0123456789"],
+      "email": []
     }
-  ],
-  "usage": {
-    "num_texts": 2,
-    "total_tokens": 8
-  }
+  ]
 }
 ```
