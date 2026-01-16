@@ -23,7 +23,7 @@ uv pip install -r requirements.txt
 
 ## How to Run Locally
 
-### Run meta-llama/Llama-3.2-1B-Instruct
+### Run Scicom-intl/multilingual-dynamic-entity-decoder
 
 ```bash
 CUDA_VISIBLE_DEVICES=2 python3 -m flash_infer_encoder_non_causal.main --host 0.0.0.0 --port 7100
