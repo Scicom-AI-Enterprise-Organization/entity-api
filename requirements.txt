@@ -1,7 +1,7 @@
 # Flash Attention Encoder Non-Causal API requirements
 torch>=2.0.0
 transformers>=4.40.0
-flashinfer-python
+flash-attn>=2.5.0  # FA3 on Hopper (H100), FA2 on Ampere (A100)
 fastapi>=0.100.0
 uvicorn>=0.23.0
 uvloop>=0.19.0

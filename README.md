@@ -1,13 +1,35 @@
 # entity-api
 
-Continuous batching API for encoder models (Token Classification / NER) using FlashInfer.
+Continuous batching API for encoder models (Token Classification / NER) using Flash Attention 2/3.
 
 ## Overview
 
-- Custom Attention Interface using FlashInfer BatchPrefillWithRaggedKVCacheWrapper
-- Dynamic batching using varlen ragged tensor style
+- Custom Attention Interface using Flash Attention 3 (FA3) optimized for Hopper GPUs, with FA2 fallback for Ampere
+- Dynamic batching using varlen ragged tensor style (no padding!)
 - Encoder model doesn't need KV Cache, so straight forward to implement
-- Non-causal (bidirectional) attention support
+- BPE token merging for word-level entity extraction
+- Regex extraction for IC, phone, email
+
+### Folder Structure
+
+```
+app/
+├── __init__.py              # Package init
+├── main.py                  # Entry point (FastAPI app)
+├── env.py                   # Config/args parsing
+├── core/
+│   ├── __init__.py
+│   ├── attention.py         # FA3/FA2 registration, version detection
+│   ├── model.py             # Model loading
+│   └── batch_processor.py   # Dynamic batch queue (cu_seqlens)
+├── utils/
+│   ├── __init__.py
+│   ├── text.py              # BPE token merging
+│   └── patterns.py          # Regex patterns, label mappings
+└── api/
+    ├── __init__.py
+    └── routes.py            # FastAPI endpoints (/predict, /health)
+```
 
 ## How to Install
 
@@ -25,14 +47,14 @@ uv pip install -r requirements.txt
 
 ### Run scicom-intl/multilingual-dynamic-entity-decoder
 
-```bash
-CUDA_VISIBLE_DEVICES=2 python3 -m flash_infer_encoder_non_causal.main --host 0.0.0.0 --port 8000
+```
+CUDA_VISIBLE_DEVICES=0 python3 -m app.main --host 0.0.0.0 --port 8000
 ```
 
 ### Supported Parameters
 
 ```bash
-python3 -m flash_infer_encoder_non_causal.main --help
+python3 -m app.main --help
 ```
 
 ```text
@@ -139,9 +161,9 @@ locust -f stress_test.py -H http://localhost:8000 --web-port 7001
 
 ### Results
 
-RPS remains stable at ~515 req/s with 1000 concurrent users
+RPS maintained at **684 req/s**, better compared to FlashInfer which achieved 501 req/s.
 
-![Locust Stress Test](images/locust-stress-test-2.png)
+![Locust Stress Test](images/locust-stress-test-3.png)
 
 ## Benchmark
 
@@ -151,11 +173,13 @@ python3 benchmark.py --endpoint predict --save benchmark --concurrency-list "10,
 
 ### Results
 
-| Concurrency | Avg Response Time | Throughput |
-|-------------|-------------------|------------|
-| 10 | 63.5ms | 157.4 req/s |
-| 50 | 68.2ms | 732.7 req/s |
-| 100 | 118.2ms | 845.7 req/s |
-| 200 | 262.0ms | 763.3 req/s |
+GPU: NVIDIA A10G, Flash Attention 2 (FA2)
 
-Peak throughput: **845.7 req/s** at 100 concurrency.
+| Concurrency | Avg Response Time | P50 | P95 | Throughput |
+|-------------|-------------------|-----|-----|------------|
+| 10 | 1416.6ms | 1378.1ms | 1632.2ms | 7.1 req/s |
+| 50 | 2513.1ms | 2534.4ms | 3582.4ms | 19.9 req/s |
+| 100 | 3738.4ms | 3850.7ms | 5763.9ms | 26.7 req/s |
+| 200 | 6137.4ms | 6031.6ms | 10327.3ms | 32.6 req/s |
+
+Peak throughput: **32.6 req/s** at 200 concurrency on A10G GPU.
