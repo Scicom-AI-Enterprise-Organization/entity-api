@@ -87,6 +87,22 @@ options:
 
 - [scicom-intl/multilingual-dynamic-entity-decoder](https://huggingface.co/Scicom-intl/multilingual-dynamic-entity-decoder)
 
+## Docker
+
+### Run Container
+
+```bash
+docker build -t entity-api:latest .
+
+docker run --gpus all -p 8000:8000 --ipc=host entity-api:latest
+```
+
+### Docker Compose
+
+```bash
+docker compose up -d --build
+```
+
 ## Simple API Example
 
 ```bash
@@ -157,7 +173,7 @@ pytest test/ -v --cov=app --cov-report=term-missing --run-integration
 
 ![Unit Tests](images/unit_test.png)
 
-## Stress Test
+## Stress Tests
 
 ```bash
 locust -f stress_test.py -H http://localhost:8000 --web-port 7001
@@ -169,7 +185,7 @@ RPS maintained at **684 req/s**, better compared to FlashInfer which achieved 50
 
 ![Locust Stress Test](images/locust-stress-test-3.png)
 
-## Benchmark
+## Benchmarks
 
 ```bash
 python3 benchmark.py --endpoint predict --save benchmark --concurrency-list "10,50,100,200"
