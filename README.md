@@ -173,13 +173,13 @@ python3 benchmark.py --endpoint predict --save benchmark --concurrency-list "10,
 
 ### Results
 
-GPU: NVIDIA A10G, Flash Attention 2 (FA2)
+GPU: NVIDIA RTX 3090 Ti, Flash Attention 2 (FA2)
 
 | Concurrency | Avg Response Time | P50 | P95 | Throughput |
 |-------------|-------------------|-----|-----|------------|
-| 10 | 1416.6ms | 1378.1ms | 1632.2ms | 7.1 req/s |
-| 50 | 2513.1ms | 2534.4ms | 3582.4ms | 19.9 req/s |
-| 100 | 3738.4ms | 3850.7ms | 5763.9ms | 26.7 req/s |
-| 200 | 6137.4ms | 6031.6ms | 10327.3ms | 32.6 req/s |
+| 10 | 35.6ms | 35.4ms | 37.6ms | 281.2 req/s |
+| 50 | 60.6ms | 60.3ms | 63.8ms | 824.9 req/s |
+| 100 | 272.4ms | 277.8ms | 280.9ms | 367.1 req/s |
+| 200 | 683.6ms | 620.9ms | 1538.5ms | 292.6 req/s |
 
-Peak throughput: **32.6 req/s** at 200 concurrency on A10G GPU.
+Peak throughput: **824.9 req/s** at 50 concurrency.

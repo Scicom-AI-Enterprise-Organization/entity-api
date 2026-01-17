@@ -1,12 +1,12 @@
 {
     "concurrency": 50,
-    "response_time_avg": 2.5131022214889525,
-    "response_time_min": 1.2292346954345703,
-    "response_time_max": 3.617733955383301,
-    "response_time_p50": 2.5344398021698,
-    "response_time_p95": 3.582369804382324,
-    "response_time_p99": 3.617733955383301,
+    "response_time_avg": 0.060609869956970215,
+    "response_time_min": 0.05850505828857422,
+    "response_time_max": 0.0641779899597168,
+    "response_time_p50": 0.06027579307556152,
+    "response_time_p95": 0.06375527381896973,
+    "response_time_p99": 0.0641779899597168,
     "total_entities_found": 99,
     "avg_entities_per_request": 1.98,
-    "throughput": 19.895728702343117
+    "throughput": 824.9481484698341
 }
