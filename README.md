@@ -67,8 +67,6 @@ options:
 
 ## Simple API Example
 
-### Single Prediction
-
 ```bash
 curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
@@ -80,47 +78,40 @@ Output:
 ```json
 {
   "text": "nama saya Ahmad dari Kuala Lumpur, IC 900101-01-0101, hubungi 0123456789 atau email ahmad@test.com",
-  "masked_text": "nama <name> dari <address> IC <ic> hubungi <phone> atau email <email>",
-  "name": ["saya Ahmad"],
-  "address": ["Kuala Lumpur"],
+  "masked_text": "nama saya <name> dari Kuala Lumpur, IC <ic>, hubungi <phone> atau email <email>",
+  "name": ["Ahmad"],
+  "address": [],
   "ic": ["900101-01-0101"],
   "phone": ["0123456789"],
-  "email": ["ahmad@gmail.com"]
+  "email": ["ahmad@test.com"]
 }
 ```
 
-### Batch Prediction
+### Debug Mode
+
+Set `debug_mode: true` to see raw encoder model output (token-level predictions):
 
 ```bash
-curl -X POST http://localhost:8000/batch/predict \
+curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
-  -d '{"texts": ["nama Ali dari Johor Bahru, hubungi 0162587806", "IC saya 900101-14-5678, email ali@test.com"]}'
+  -d '{"text": "nama saya Ahmad", "debug_mode": true}'
 ```
 
 Output:
 
 ```json
 {
-  "id": "1706c984-c035-4a5f-8c61-f7b95c93c5ac",
-  "results": [
-    {
-      "text": "nama Ali dari Johor Bahru, hubungi 0123456789",
-      "masked_text": "nama <name> dari <address> hubungi <phone>",
-      "name": ["Ali"],
-      "address": ["Johor Bahru"],
-      "ic": [],
-      "phone": ["0123456789"],
-      "email": []
-    },
-    {
-      "text": "IC saya 900101-01-0101, email xxx@gmail.com",
-      "masked_text": "IC <name> <ic> email <email>",
-      "name": [],
-      "address": [],
-      "ic": ["900101-01-0101"],
-      "phone": [],
-      "email": ["xxx@gmail.com"]
-    }
+  "text": "nama saya Ahmad",
+  "masked_text": "nama <name>",
+  "name": ["saya Ahmad"],
+  "address": [],
+  "ic": [],
+  "phone": [],
+  "email": [],
+  "encoder_output": [
+    {"word": "nama", "label": "O"},
+    {"word": "saya", "label": "name"},
+    {"word": "Ahmad", "label": "name"}
   ]
 }
 ```

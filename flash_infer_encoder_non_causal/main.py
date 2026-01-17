@@ -15,11 +15,8 @@ Model: https://huggingface.co/Scicom-intl/multilingual-dynamic-entity-decoder
 """
 
 from flash_infer_encoder_non_causal.env import args, logging
-from flash_infer_encoder_non_causal.parameters import (
-    EntityRequest,
-    EntityResponse,
-    TokenClassificationRequest,
-)
+# Parameters module available if needed
+# from flash_infer_encoder_non_causal.parameters import EntityResponse
 from fastapi import FastAPI, Request, HTTPException
 from transformers import AutoTokenizer, Qwen3ForTokenClassification, AttentionInterface
 from typing import Optional, List, Dict, Any
@@ -581,141 +578,16 @@ async def health():
     return {'status': 'healthy', 'model_loaded': model is not None}
 
 
-@app.post('/batch/predict')
-async def batch_predict_entities(form: EntityRequest, request: Request):
-    """
-    Process entity extraction for multiple texts (batch).
-    
-    Returns same format as /ner endpoint for each text:
-    - text, masked_text, name, address, ic, phone, email
-    """
-    request_id = request.state.request_id
-    
-    results = []
-    for text in form.texts:
-        # Extract regex entities (IC, phone, email)
-        regex_entities = {
-            'ic': [],
-            'phone': [],
-            'email': [],
-        }
-        
-        for entity_type, pattern in REGEX_PATTERNS.items():
-            for match in pattern.finditer(text):
-                regex_entities[entity_type.lower()].append(match.group())
-        
-        # Get model predictions
-        future = asyncio.Future()
-        await inference_queue.put({
-            'inputs': text,
-            'future': future,
-            'request_id': request_id,
-            'is_split_into_words': False,
-        })
-        
-        result = await future
-        
-        # Merge BPE tokens with labels
-        merged_words, merged_labels = merge_bpe_tokens_tagging(
-            result['tokens'], 
-            result['labels']
-        )
-        
-        # Initialize entity lists
-        model_entities = {
-            'name': [],
-            'address': [],
-        }
-        
-        # Label mapping
-        label_to_type = {
-            'LABEL_1': 'name',
-            'LABEL_2': 'address',
-        }
-        
-        # Extract entities by grouping consecutive same labels
-        current_entity = None
-        masked_words = merged_words.copy()
-        entity_word_indices = []
-        
-        for i, (word, label) in enumerate(zip(merged_words, merged_labels)):
-            if label in label_to_type:
-                entity_type = label_to_type[label]
-                if current_entity and current_entity['type'] == entity_type:
-                    current_entity['words'].append(word)
-                    current_entity['indices'].append(i)
-                else:
-                    if current_entity:
-                        entity_text = ' '.join(current_entity['words'])
-                        model_entities[current_entity['type']].append(entity_text)
-                        entity_word_indices.append({
-                            'indices': current_entity['indices'],
-                            'type': current_entity['type'],
-                        })
-                    current_entity = {
-                        'type': entity_type,
-                        'words': [word],
-                        'indices': [i],
-                    }
-            else:
-                if current_entity:
-                    entity_text = ' '.join(current_entity['words'])
-                    model_entities[current_entity['type']].append(entity_text)
-                    entity_word_indices.append({
-                        'indices': current_entity['indices'],
-                        'type': current_entity['type'],
-                    })
-                    current_entity = None
-        
-        if current_entity:
-            entity_text = ' '.join(current_entity['words'])
-            model_entities[current_entity['type']].append(entity_text)
-            entity_word_indices.append({
-                'indices': current_entity['indices'],
-                'type': current_entity['type'],
-            })
-        
-        # Create masked text
-        for entity_info in entity_word_indices:
-            indices = entity_info['indices']
-            entity_type = entity_info['type']
-            for idx in indices:
-                if idx == indices[0]:
-                    masked_words[idx] = f"<{entity_type}>"
-                else:
-                    masked_words[idx] = None
-        
-        final_masked_words = [w for w in masked_words if w is not None]
-        masked_text = ' '.join(final_masked_words)
-        
-        # Apply regex masking
-        for entity_type, entities in regex_entities.items():
-            for entity_text in entities:
-                masked_text = masked_text.replace(entity_text, f"<{entity_type}>")
-        
-        results.append({
-            'text': text,
-            'masked_text': masked_text,
-            'name': model_entities['name'],
-            'address': model_entities['address'],
-            'ic': regex_entities['ic'],
-            'phone': regex_entities['phone'],
-            'email': regex_entities['email'],
-        })
-    
-    return {
-        'id': request_id,
-        'results': results,
-        }
-
-
 @app.post('/predict')
 async def predict_single(request: Request):
     """
     Named Entity Recognition endpoint with token merging and regex support.
     
-    Uses merge_bpe_tokens_tagging (like Malaya) to merge subword tokens.
-    Outputs masked_text with entity placeholders.
+    Flow:
+    1. Predict with model → get name/address entities
+    2. Build masked_text → replace name/address with <name>, <address>
+    3. Apply regex on masked_text → replace IC/phone/email with <ic>, <phone>, <email>
+    4. Filter model entities that contain regex patterns
     
     Example:
         POST /predict
@@ -734,227 +606,131 @@ async def predict_single(request: Request):
     """
     body = await request.json()
     text = body.get('text', '')
+    debug_mode = body.get('debug_mode', False)
     
     if not text:
         raise HTTPException(status_code=400, detail="Text is required")
     
-    # First, extract regex entities (IC, phone, email) from original text
-    regex_entities = {
-        'ic': [],
-        'phone': [],
-        'email': [],
-    }
-    regex_spans = []  # Track spans for masking
-    
-    for entity_type, pattern in REGEX_PATTERNS.items():
-        for match in pattern.finditer(text):
-            regex_entities[entity_type.lower()].append(match.group())
-            regex_spans.append({
-                'start': match.start(),
-                'end': match.end(),
-                'text': match.group(),
-                'type': entity_type.lower(),
-            })
-    
-    # Sort spans by start position (descending) for replacement
-    regex_spans.sort(key=lambda x: x['start'], reverse=True)
-    
-    # Create masked text for regex entities
-    masked_text = text
-    for span in regex_spans:
-        placeholder = f"<{span['type']}>"
-        masked_text = masked_text[:span['start']] + placeholder + masked_text[span['end']:]
-    
-    # Now process with model for name/address entities
+    # ========== STEP 1: Run model prediction ==========
     future = asyncio.Future()
     await inference_queue.put({
         'inputs': text,
         'text_raw': text,
         'future': future,
         'request_id': request.state.request_id,
-        'is_split_into_words': False,  # Use regular tokenization, then merge
+        'is_split_into_words': False,
     })
     
     result = await future
     
-    # Merge BPE tokens with labels (like Malaya's merge_sentencepiece_tokens_tagging)
+    # Merge BPE tokens with labels
     merged_words, merged_labels = merge_bpe_tokens_tagging(
         result['tokens'], 
         result['labels']
     )
-    
-    # Initialize entity lists
-    model_entities = {
-        'name': [],      # LABEL_1 - person/name
-        'address': [],   # LABEL_2 - location/address
-    }
     
     # Label mapping
     label_to_type = {
         'LABEL_1': 'name',
         'LABEL_2': 'address',
     }
+    label_to_readable = {
+        'LABEL_0': 'O',
+        'LABEL_1': 'name',
+        'LABEL_2': 'address',
+    }
     
-    # Extract entities by grouping consecutive same labels
+    # Build encoder_output: raw token predictions from model
+    if debug_mode:
+        encoder_output = []
+        for word, label in zip(merged_words, merged_labels):
+            readable_label = label_to_readable.get(label, label)
+            encoder_output.append({'word': word, 'label': readable_label})
+    
+    # Extract model entities by grouping consecutive same labels
+    model_entities_raw = {'name': [], 'address': []}
     current_entity = None
-    entity_word_indices = []  # Track which words are entities for masking
     
     for i, (word, label) in enumerate(zip(merged_words, merged_labels)):
         if label in label_to_type:
             entity_type = label_to_type[label]
             if current_entity and current_entity['type'] == entity_type:
-                # Continue entity
                 current_entity['words'].append(word)
-                current_entity['indices'].append(i)
             else:
-                # Save previous entity
                 if current_entity:
                     entity_text = ' '.join(current_entity['words'])
-                    model_entities[current_entity['type']].append(entity_text)
-                    entity_word_indices.append({
-                        'indices': current_entity['indices'],
-                        'type': current_entity['type'],
-                        'text': entity_text,
-                    })
-                # Start new entity
-            current_entity = {
-                    'type': entity_type,
-                    'words': [word],
-                    'indices': [i],
-            }
+                    model_entities_raw[current_entity['type']].append(entity_text)
+                current_entity = {'type': entity_type, 'words': [word]}
         else:
-            # Not an entity - save any current entity
             if current_entity:
                 entity_text = ' '.join(current_entity['words'])
-                model_entities[current_entity['type']].append(entity_text)
-                entity_word_indices.append({
-                    'indices': current_entity['indices'],
-                    'type': current_entity['type'],
-                    'text': entity_text,
-                })
+                model_entities_raw[current_entity['type']].append(entity_text)
                 current_entity = None
     
-    # Don't forget last entity
     if current_entity:
         entity_text = ' '.join(current_entity['words'])
-        model_entities[current_entity['type']].append(entity_text)
-        entity_word_indices.append({
-            'indices': current_entity['indices'],
-            'type': current_entity['type'],
-            'text': entity_text,
-        })
+        model_entities_raw[current_entity['type']].append(entity_text)
     
-    # Create masked text for model entities
-    # Replace entity words in merged_words with placeholders
-    masked_words = merged_words.copy()
-    for entity_info in entity_word_indices:
-        indices = entity_info['indices']
-        entity_type = entity_info['type']
-        # Replace first word with placeholder, remove rest
-        for idx in indices:
-            if idx == indices[0]:
-                masked_words[idx] = f"<{entity_type}>"
-            else:
-                masked_words[idx] = None  # Mark for removal
+    # ========== STEP 2: Extract regex from ORIGINAL text first ==========
+    regex_entities = {'ic': [], 'phone': [], 'email': []}
+    regex_matches = []  # Store all regex matches with their text
     
-    # Build final masked text from merged words
-    final_masked_words = [w for w in masked_words if w is not None]
-    model_masked_text = ' '.join(final_masked_words)
+    for entity_type, pattern in REGEX_PATTERNS.items():
+        for match in pattern.finditer(text):
+            regex_entities[entity_type.lower()].append(match.group())
+            regex_matches.append(match.group().lower())
     
-    # Apply regex masking to the model-masked text
-    for entity_type, entities in regex_entities.items():
-        for entity_text in entities:
-            model_masked_text = model_masked_text.replace(entity_text, f"<{entity_type}>")
+    # ========== STEP 3: Filter model entities that contain regex patterns ==========
+    def filter_entities_containing_regex(entity_list):
+        """Remove entities that contain any regex-matched pattern."""
+        filtered = []
+        for entity in entity_list:
+            entity_lower = entity.lower()
+            # Check if this entity contains any regex pattern
+            contains_regex = any(regex_text in entity_lower for regex_text in regex_matches)
+            if not contains_regex:
+                filtered.append(entity)
+        return filtered
     
-    return {
+    filtered_names = filter_entities_containing_regex(model_entities_raw['name'])
+    filtered_addresses = filter_entities_containing_regex(model_entities_raw['address'])
+    
+    # ========== STEP 4: Build masked_text ==========
+    masked_text = text
+    
+    # First, replace FILTERED model entities (longest first)
+    all_filtered_entities = []
+    for entity in filtered_names:
+        all_filtered_entities.append((entity, 'name'))
+    for entity in filtered_addresses:
+        all_filtered_entities.append((entity, 'address'))
+    
+    # Sort by length descending (replace longer entities first)
+    all_filtered_entities.sort(key=lambda x: len(x[0]), reverse=True)
+    
+    for entity, etype in all_filtered_entities:
+        masked_text = masked_text.replace(entity, f'<{etype}>')
+    
+    # ========== STEP 5: Apply regex masking on masked_text ==========
+    # Replace IC, phone, email patterns with their placeholders
+    for entity_type, pattern in REGEX_PATTERNS.items():
+        for match in pattern.finditer(masked_text):
+            masked_text = masked_text.replace(match.group(), f"<{entity_type.lower()}>")
+    
+    response = {
         'text': text,
-        'masked_text': model_masked_text,
-        'name': model_entities['name'],
-        'address': model_entities['address'],
+        'masked_text': masked_text,
+        'name': filtered_names,
+        'address': filtered_addresses,
         'ic': regex_entities['ic'],
         'phone': regex_entities['phone'],
         'email': regex_entities['email'],
     }
-
-
-@app.post('/batch_predict')
-async def batch_predict(form: TokenClassificationRequest, request: Request):
-    """
-    Batch prediction endpoint.
     
-    All texts are processed together in a single batch using
-    ragged tensor style with cu_seqlens.
-    """
-    request_id = request.state.request_id
+    if debug_mode:
+        response['encoder_output'] = encoder_output
     
-    # Handle single text or list
-    texts = form.text if isinstance(form.text, list) else [form.text]
-    
-    futures = []
-    for text in texts:
-        future = asyncio.Future()
-        await inference_queue.put({
-            'inputs': text,
-            'future': future,
-            'request_id': request_id,
-        })
-        futures.append(future)
-    
-    # Wait for all results
-    results = await asyncio.gather(*[f for f in futures])
-    
-    return {
-        'id': request_id,
-        'results': results,
-        'batch_size': len(texts),
-    }
-
-
-@app.post('/v1/embeddings')
-async def embeddings(request: Request):
-    """
-    Get embeddings from the encoder model.
-    
-    Returns the hidden states from the last layer.
-    """
-    body = await request.json()
-    texts = body.get('input', [])
-    if isinstance(texts, str):
-        texts = [texts]
-    
-    with torch.no_grad():
-        encoded = tokenizer(
-            texts,
-            return_tensors='pt',
-            truncation=True,
-            max_length=args.max_seq_len,
-            padding=True,
-        ).to('cuda')
-        
-        outputs = model(
-            input_ids=encoded['input_ids'],
-            attention_mask=encoded['attention_mask'],
-            output_hidden_states=True,
-        )
-        
-        # Use last hidden state, mean pool over tokens
-        hidden_states = outputs.hidden_states[-1]  # [batch, seq, hidden]
-        attention_mask = encoded['attention_mask'].unsqueeze(-1)
-        
-        # Mean pooling
-        sum_hidden = (hidden_states * attention_mask).sum(dim=1)
-        count = attention_mask.sum(dim=1)
-        embeddings = (sum_hidden / count).cpu().tolist()
-    
-    return {
-        'object': 'list',
-        'data': [
-            {'object': 'embedding', 'index': i, 'embedding': emb}
-            for i, emb in enumerate(embeddings)
-        ],
-        'model': args.model,
-        'usage': {'prompt_tokens': encoded['input_ids'].numel()},
-    }
+    return response
 
 
 @app.on_event("startup")
