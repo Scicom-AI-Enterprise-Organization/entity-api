@@ -1,0 +1,12 @@
+{
+    "concurrency": 50,
+    "response_time_avg": 0.0682409143447876,
+    "response_time_min": 0.05796933174133301,
+    "response_time_max": 0.0836188793182373,
+    "response_time_p50": 0.06072497367858887,
+    "response_time_p95": 0.08342385292053223,
+    "response_time_p99": 0.0836188793182373,
+    "total_entities_found": 99,
+    "avg_entities_per_request": 1.98,
+    "throughput": 732.698271705076
+}

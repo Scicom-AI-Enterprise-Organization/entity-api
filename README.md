@@ -139,6 +139,23 @@ locust -f stress_test.py -H http://localhost:8000 --web-port 7001
 
 ### Results
 
-RPS remains stable at ~560 req/s regardless of user count (from 200 to 900 users)
+RPS remains stable at ~515 req/s with 1000 concurrent users
 
-![Locust Stress Test](images/locust-stress-test.png)
+![Locust Stress Test](images/locust-stress-test-2.png)
+
+## Benchmark
+
+```bash
+python3 benchmark.py --endpoint predict --save benchmark --concurrency-list "10,50,100,200"
+```
+
+### Results
+
+| Concurrency | Avg Response Time | Throughput |
+|-------------|-------------------|------------|
+| 10 | 63.5ms | 157.4 req/s |
+| 50 | 68.2ms | 732.7 req/s |
+| 100 | 118.2ms | 845.7 req/s |
+| 200 | 262.0ms | 763.3 req/s |
+
+Peak throughput: **845.7 req/s** at 100 concurrency.

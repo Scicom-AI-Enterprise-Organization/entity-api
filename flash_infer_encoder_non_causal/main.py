@@ -31,9 +31,20 @@ import re
 
 # Regex patterns for IC, phone, email
 REGEX_PATTERNS = {
-    'IC': re.compile(r'\b\d{6}-\d{2}-\d{4}\b|\b\d{12}\b'),
-    'PHONE': re.compile(r'\b(?:\+?6?0)?1[0-9]-?\d{3,4}-?\d{4}\b|\b0[3-9]-?\d{7,8}\b'),
-    'EMAIL': re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
+    'ic': re.compile(r'\b\d{6}-\d{2}-\d{4}\b|\b\d{12}\b'),
+    'phone': re.compile(r'\b(?:\+?6?0)?1[0-9]-?\d{3,4}-?\d{4}\b|\b0[3-9]-?\d{7,8}\b'),
+    'email': re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
+}
+
+# Label mappings (module-level to avoid recreation per request)
+LABEL_TO_TYPE = {
+    'LABEL_1': 'name',
+    'LABEL_2': 'address',
+}
+LABEL_TO_READABLE = {
+    'LABEL_0': 'O',
+    'LABEL_1': 'name',
+    'LABEL_2': 'address',
 }
 
 
@@ -629,22 +640,11 @@ async def predict_single(request: Request):
         result['labels']
     )
     
-    # Label mapping
-    label_to_type = {
-        'LABEL_1': 'name',
-        'LABEL_2': 'address',
-    }
-    label_to_readable = {
-        'LABEL_0': 'O',
-        'LABEL_1': 'name',
-        'LABEL_2': 'address',
-    }
-    
     # Build encoder_output: raw token predictions from model
     if debug_mode:
         encoder_output = []
         for word, label in zip(merged_words, merged_labels):
-            readable_label = label_to_readable.get(label, label)
+            readable_label = LABEL_TO_READABLE.get(label, label)
             encoder_output.append({'word': word, 'label': readable_label})
     
     # Extract model entities by grouping consecutive same labels
@@ -652,8 +652,8 @@ async def predict_single(request: Request):
     current_entity = None
     
     for i, (word, label) in enumerate(zip(merged_words, merged_labels)):
-        if label in label_to_type:
-            entity_type = label_to_type[label]
+        if label in LABEL_TO_TYPE:
+            entity_type = LABEL_TO_TYPE[label]
             if current_entity and current_entity['type'] == entity_type:
                 current_entity['words'].append(word)
             else:
@@ -677,7 +677,7 @@ async def predict_single(request: Request):
     
     for entity_type, pattern in REGEX_PATTERNS.items():
         for match in pattern.finditer(text):
-            regex_entities[entity_type.lower()].append(match.group())
+            regex_entities[entity_type].append(match.group())
             regex_matches.append(match.group().lower())
     
     # ========== STEP 3: Filter model entities that contain regex patterns ==========
@@ -712,10 +712,10 @@ async def predict_single(request: Request):
         masked_text = masked_text.replace(entity, f'<{etype}>')
     
     # ========== STEP 5: Apply regex masking on masked_text ==========
-    # Replace IC, phone, email patterns with their placeholders
-    for entity_type, pattern in REGEX_PATTERNS.items():
-        for match in pattern.finditer(masked_text):
-            masked_text = masked_text.replace(match.group(), f"<{entity_type.lower()}>")
+    # Use already-extracted regex entities (avoid running regex twice)
+    for entity_type, entities in regex_entities.items():
+        for entity_text in entities:
+            masked_text = masked_text.replace(entity_text, f"<{entity_type}>")
     
     response = {
         'text': text,
@@ -755,4 +755,5 @@ if __name__ == "__main__":
         port=args.port,
         log_level=args.loglevel.lower(),
         access_log=True,
+        loop="uvloop",
     )
