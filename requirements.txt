@@ -1,4 +1,4 @@
-# Flash Attention Encoder Non-Causal API requirements
+# Flash Attention Encoder API requirements
 torch>=2.0.0
 transformers>=4.40.0
 flash-attn>=2.5.0  # FA3 on Hopper (H100), FA2 on Ampere (A100)
@@ -9,3 +9,7 @@ pydantic>=2.0.0
 accelerate>=0.25.0
 aiohttp>=3.8.0
 click>=8.0.0
+
+# Testing
+pytest>=8.0.0
+pytest-cov>=4.0.0

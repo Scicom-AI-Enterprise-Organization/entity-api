@@ -141,17 +141,21 @@ Output:
 ## Unit Tests
 
 ```bash
-python3 -m unittest test.test_varlen_batching
-python3 -m unittest test.test_bpe_merging
-python3 -m unittest test.test_regex_entities
-python3 -m unittest test.test_attention
+# Run all tests with pytest
+pytest test/ -v
+
+# Run with code coverage
+pytest test/ -v --cov=app --cov-report=term-missing
+
+# Run with integration tests (requires GPU)
+pytest test/ -v --cov=app --cov-report=term-missing --run-integration
 ```
 
-**Test Coverage:**
-- `test_varlen_batching` - Variable length sequence packing and FlashInfer ragged prefill
-- `test_bpe_merging` - BPE token merging for GPT-style and SentencePiece tokens
-- `test_regex_entities` - IC, phone, and email extraction via regex patterns
-- `test_attention` - Non-causal attention correctness comparing FlashInfer with SDPA
+### Results
+
+106 tests passed, 71% code coverage.
+
+![Unit Tests](images/unit_test.png)
 
 ## Stress Test
 

@@ -1,1 +1,1 @@
-# Test package for entity-api
+# Test package

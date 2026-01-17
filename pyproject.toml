@@ -42,4 +42,12 @@ dev = [
 "Bug Tracker" = "https://github.com/malaysia-ai/entity-api/issues"
 
 [tool.setuptools.packages.find]
-include = ["flash_infer_encoder_non_causal*"]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+asyncio_mode = "auto"
+addopts = "-v"
+markers = [
+    "integration: mark test as integration test (requires model loading)",
+]
