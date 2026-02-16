@@ -1,6 +1,6 @@
-# entity-api
+# Entity API
 
-Continuous batching API for encoder models (Token Classification / NER) using Flash Attention 2/3.
+Dynamic batching API for Token Classification using LLM2Vec.
 
 ## Overview
 
